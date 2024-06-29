@@ -1,3 +1,4 @@
+import chokidar from "chokidar";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { getTestClient, initializeServer, setupWorkspace, tearDownWorkspace } from "../test-utils.js";
 import {
@@ -5,29 +6,27 @@ import {
   WorkDoneProgress,
   WorkDoneProgressCreateRequest
 } from "vscode-languageserver";
-import { utimes } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolveIri } from "@hyperjump/uri";
 import workspace from "./workspace.js";
 import documentSettings from "./document-settings.js";
 import schemaRegistry from "./schema-registry.js";
+import { utimes } from "node:fs/promises";
 
 
 describe("Feature - workspace (neovim)", () => {
   let client;
   let capabilities;
   let workspaceFolder;
+  let watcher;
 
   beforeAll(async () => {
     client = getTestClient([workspace, documentSettings, schemaRegistry]);
 
     workspaceFolder = await setupWorkspace({
-      "subject.schema.json": `{ "$schema": "https://json-schema.org/draft/2020-12/cshema" }`
+      "subject.schema.json": `{ "$schema": "https://json-schema.org/draft/2020-12/schema" }`
     });
 
-    /**
-     * @type {import("vscode-languageserver").InitializeParams}
-     */
     const init = {
       capabilities: {
         workspace: {
@@ -42,14 +41,20 @@ describe("Feature - workspace (neovim)", () => {
     };
     capabilities = await initializeServer(client, init);
 
-    // Block for a while to allow InitializedNotification time to finish. This
-    // is only needed for the node-based workspace watching used for neovim
+    // Initialize chokidar watcher
+    watcher = chokidar.watch(workspaceFolder, {
+      persistent: true
+    });
+
     await wait(10);
   });
 
   afterAll(async () => {
     await client.dispose();
     await tearDownWorkspace(workspaceFolder);
+    if (watcher) {
+      await watcher.close();
+    }
   });
 
   test("capabilities", async () => {
@@ -63,7 +68,7 @@ describe("Feature - workspace (neovim)", () => {
 
   test("a change to a watched file should validate the workspace", async () => {
     const validatedSchemas = new Promise((resolve) => {
-      let schemaUris;
+      let schemaUris = [];
 
       client.onRequest(WorkDoneProgressCreateRequest, ({ token }) => {
         client.onProgress(WorkDoneProgress, token, ({ kind }) => {
@@ -97,7 +102,7 @@ const wait = async (delay) => {
   });
 };
 
-const touch = (path) => {
+const touch = async (path) => {
   const time = new Date();
-  return utimes(path, time, time);
+  await utimes(path, time, time);
 };
